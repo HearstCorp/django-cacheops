@@ -1,8 +1,10 @@
 from __future__ import absolute_import
 import warnings
 import six
+import socket
 import sys
 import traceback
+from urlparse import urlparse
 
 from funcy import decorator, identity, memoize
 import redis
@@ -29,6 +31,10 @@ else:
 
 client_class_name = getattr(settings, 'CACHEOPS_CLIENT_CLASS', None)
 client_class = import_string(client_class_name) if client_class_name else redis.StrictRedis
+
+
+def ip(url):
+    return socket.gethostbyname(urlparse(url).hostname)
 
 
 class SafeRedis(client_class):
@@ -71,14 +77,15 @@ class LazyRedis(object):
 
 CacheopsRedis = SafeRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else client_class
 try:
-    # the conf could be a list of string
+    # the conf could be a list or string
     # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
     # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
-    redis_replica_conf = settings.CACHEOPS_REDIS_REPLICA
-    if isinstance(redis_replica_conf, six.string_types):
-        redis_replicas = map(redis.StrictRedis.from_url, redis_replica_conf.split(','))
-    else:
-        redis_replicas = map(redis.StrictRedis.from_url, redis_replica_conf)
+    master_ip = ip(settings.REDIS_MASTER)
+    redis_replicas = settings.REDIS_REPLICAS
+    if isinstance(redis_replicas, six.string_types):
+        redis_replicas = redis_replicas.split(',')
+    redis_replicas = [r for r in redis_replicas if ip(r) != master_ip]
+    redis_replicas = map(redis.StrictRedis.from_url, redis_replicas)
 except AttributeError as err:
     redis_client = LazyRedis()
 else:
