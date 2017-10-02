@@ -14,7 +14,6 @@ import random
 
 from .conf import settings
 
-
 if settings.CACHEOPS_DEGRADE_ON_FAILURE:
     @decorator
     def handle_connection_failure(call):
@@ -31,18 +30,31 @@ else:
 
 client_class_name = getattr(settings, 'CACHEOPS_CLIENT_CLASS', None)
 client_class = import_string(client_class_name) if client_class_name else redis.StrictRedis
+redis_replicas = []
 
 
 def ip(url):
     return socket.gethostbyname(urlparse(url).hostname)
 
 
+def set_redis_replicas():
+    # the conf could be a list or string
+    # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
+    # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
+    global redis_replicas
+    master_ip = ip(settings.REDIS_MASTER)
+    redis_replicas = settings.REDIS_REPLICAS
+    if isinstance(redis_replicas, six.string_types):
+        redis_replicas = redis_replicas.split(',')
+    redis_replicas = [r for r in redis_replicas if ip(r) != master_ip]
+    redis_replicas = map(redis.StrictRedis.from_url, redis_replicas)
+
+
 class SafeRedis(client_class):
     get = handle_connection_failure(redis.StrictRedis.get)
 
-    """ Handles failover of AWS elasticache
-    """
     def execute_command(self, *args, **options):
+        """ Handle failover of AWS elasticache."""
         try:
             return super(SafeRedis, self).execute_command(*args, **options)
         except redis.ResponseError as e:
@@ -52,6 +64,7 @@ class SafeRedis(client_class):
             connection.disconnect()
             warnings.warn("Primary probably failed over, reconnecting")
             return super(SafeRedis, self).execute_command(*args, **options)
+
 
 class LazyRedis(object):
     def _setup(self):
@@ -74,24 +87,14 @@ class LazyRedis(object):
         self._setup()
         return setattr(self, name, value)
 
-
 CacheopsRedis = SafeRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else client_class
 try:
-    # the conf could be a list or string
-    # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
-    # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
-    master_ip = ip(settings.REDIS_MASTER)
-    redis_replicas = settings.REDIS_REPLICAS
-    if isinstance(redis_replicas, six.string_types):
-        redis_replicas = redis_replicas.split(',')
-    redis_replicas = [r for r in redis_replicas if ip(r) != master_ip]
-    redis_replicas = map(redis.StrictRedis.from_url, redis_replicas)
+    set_redis_replicas()
 except AttributeError as err:
     redis_client = LazyRedis()
 else:
     class ReplicaProxyRedis(CacheopsRedis):
-        """ Proxy `get` calls to redis replica.
-        """
+        """Proxy `get` calls to redis replica."""
         def get(self, *args, **kwargs):
             try:
                 redis_replica = random.choice(redis_replicas)
