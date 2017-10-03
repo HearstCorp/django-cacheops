@@ -62,6 +62,7 @@ class SafeRedis(client_class):
                 raise
             connection = self.connection_pool.get_connection(args[0], **options)
             connection.disconnect()
+            set_redis_replicas()
             warnings.warn("Primary probably failed over, reconnecting")
             return super(SafeRedis, self).execute_command(*args, **options)
 
