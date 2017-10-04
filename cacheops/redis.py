@@ -42,12 +42,17 @@ def set_redis_replicas():
     # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
     # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
     global redis_replicas
-    master_ip = ip(settings.REDIS_MASTER)
-    redis_replicas = settings.REDIS_REPLICAS
-    if isinstance(redis_replicas, six.string_types):
-        redis_replicas = redis_replicas.split(',')
-    redis_replicas = [r for r in redis_replicas if ip(r) != master_ip]
-    redis_replicas = map(redis.StrictRedis.from_url, redis_replicas)
+    if isinstance(settings.REDIS_REPLICAS, six.string_types):
+        temp = settings.REDIS_REPLICAS.split(',')
+    else:
+        temp = list(settings.REDIS_REPLICAS)
+    master_url = settings.REDIS_MASTER
+    master_ip = ip(master_url)
+    temp = [r for r in temp if ip(r) != master_ip]
+    temp = [r for r in temp for _ in range(settings.REDIS_REPLICA_WEIGHT)]
+    temp = map(redis.StrictRedis.from_url, temp)
+    temp.append(redis.StrictRedis.from_url(master_url))
+    redis_replicas = temp
 
 
 class SafeRedis(client_class):
