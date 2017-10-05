@@ -14,25 +14,34 @@ from .conf import settings
 
 logger = logging.getLogger(__name__)
 
-circuit_tripped = None
+# Global circuit-breaker flag. Values:
+#   None = circuit breaker closed, Redis calls are attempted.
+#   <time_seconds> = circuit breaker open, Redis calls are skipped.
+circuit_breaker_opened = None
 
 if settings.CACHEOPS_DEGRADE_ON_FAILURE:
     @decorator
     def handle_connection_failure(call):
-        global circuit_tripped
-        if circuit_tripped:
-            if time() - circuit_tripped > settings.REDIS_CIRCUIT_BREAKER_RESET_SECONDS:
-                logger.info("Resetting Redis circuit breaker")
-                circuit_tripped = None
+        """Skip Redis calls for a configurable period after a timeout."""
+        global circuit_breaker_opened
+        if circuit_breaker_opened:
+
+            # Circuit breaker is open! Should we close it yet?
+            if time() - circuit_breaker_opened > settings.REDIS_CIRCUIT_BREAKER_RESET_SECONDS:
+                # Yes, let's close the circuit breaker
+                logger.info("Closing Redis circuit breaker")
+                circuit_breaker_opened = None
             else:
+                # No, just skip this Redis call
                 logger.debug("Redis circuit breaker is open! Skipping Redis call")
                 return
         try:
             return call()
         except redis.RedisError as e:
+            # Redis timed out! Let's open the circuit breaker
             logger.warn("The cacheops cache is unreachable! Error: %s" % e)
-            logger.info("Tripping Redis circuit breaker")
-            circuit_tripped = time()
+            logger.info("Opening Redis circuit breaker")
+            circuit_breaker_opened = time()
         except Exception as e:
             logger.warn(e)
 else:
