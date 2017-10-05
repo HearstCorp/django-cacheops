@@ -2,8 +2,11 @@ from __future__ import absolute_import
 import warnings
 from contextlib import contextmanager
 import six
-from time import time
+import ctypes
 import logging
+import mmap
+import os
+from time import time
 
 from funcy import decorator, identity, memoize, LazyObject
 import redis
@@ -15,22 +18,29 @@ from .conf import settings
 logger = logging.getLogger(__name__)
 
 # Global circuit-breaker flag. Values:
-#   None = circuit breaker closed, Redis calls are attempted.
+#   0 = circuit breaker closed, Redis calls are attempted.
 #   <time_seconds> = circuit breaker open, Redis calls are skipped.
-circuit_breaker_opened = None
+try:
+    fd = os.open('/tmp/redis_circuit_breaker', os.O_RDWR)
+    buf = mmap.mmap(fd, 1024)
+except (OSError, ValueError):
+    logger.warn("Mmap's not working, Redis circuit breaker will be local")
+    circuit_breaker = lambda: None  # noqa: E731
+    circuit_breaker.value = 0
+else:
+    circuit_breaker = ctypes.c_int.from_buffer(buf)
 
 if settings.CACHEOPS_DEGRADE_ON_FAILURE:
     @decorator
     def handle_connection_failure(call):
         """Skip Redis calls for a configurable period after a timeout."""
-        global circuit_breaker_opened
-        if settings.FEATURE_CACHEOPS_CIRCUIT_BREAKER and circuit_breaker_opened:
+        if settings.FEATURE_CACHEOPS_CIRCUIT_BREAKER and circuit_breaker.value:
 
             # Circuit breaker is open! Should we close it yet?
-            if time() - circuit_breaker_opened > settings.REDIS_CIRCUIT_BREAKER_RESET_SECONDS:
+            if time() - circuit_breaker.value > settings.REDIS_CIRCUIT_BREAKER_RESET_SECONDS:
                 # Yes, let's close the circuit breaker
                 logger.info("Closing Redis circuit breaker")
-                circuit_breaker_opened = None
+                circuit_breaker.value = 0
             else:
                 # No, just skip this Redis call
                 logger.debug("Redis circuit breaker is open! Skipping Redis call")
@@ -41,7 +51,7 @@ if settings.CACHEOPS_DEGRADE_ON_FAILURE:
             # Redis timed out! Let's open the circuit breaker
             logger.warn("The cacheops cache is unreachable! Error: %s" % e)
             logger.info("Opening Redis circuit breaker")
-            circuit_breaker_opened = time()
+            circuit_breaker.value = int(time())
         except Exception as e:
             logger.warn(e)
 else:
