@@ -2,10 +2,11 @@
 import re
 import json
 import inspect
-from funcy import memoize, compose, wraps, any
+from funcy import memoize, compose, wraps, any, any_fn, select_values, make_lookuper
 from funcy.py2 import mapcat
 from .cross import md5hex
 
+from django.apps import apps
 from django.db import models
 from django.http import HttpRequest
 
@@ -21,14 +22,6 @@ NOT_SERIALIZED_FIELDS = (
 )
 
 
-@memoize
-def non_proxy(model):
-    while model._meta.proxy:
-        # Every proxy model has exactly one non abstract parent model
-        model = next(b for b in model.__bases__
-                       if issubclass(b, models.Model) and not b._meta.abstract)
-    return model
-
 def model_family(model):
     """
     Returns a list of all proxy models, including subclasess, superclassses and siblings.
@@ -38,7 +31,7 @@ def model_family(model):
 
     # NOTE: we also list multitable submodels here, we just don't care.
     #       Cacheops doesn't support them anyway.
-    return class_tree(non_proxy(model))
+    return class_tree(model._meta.concrete_model)
 
 
 @memoize
@@ -46,14 +39,15 @@ def family_has_profile(cls):
     return any(model_profile, model_family(cls))
 
 
+@make_lookuper
+def table_to_model():
+    return {m._meta.db_table: m for m in apps.get_models(include_auto_created=True)}
+
+
 class MonkeyProxy(object):
-    def __init__(self, cls):
-        monkey_bases = [b._no_monkey for b in cls.__bases__ if hasattr(b, '_no_monkey')]
-        for monkey_base in monkey_bases:
-            self.__dict__.update(monkey_base.__dict__)
+    pass
 
-
-def monkey_mix(cls, mixin, methods=None):
+def monkey_mix(cls, mixin):
     """
     Mixes a mixin into existing class.
     Does not use actual multi-inheritance mixins, just monkey patches methods.
@@ -65,15 +59,13 @@ def monkey_mix(cls, mixin, methods=None):
             self._no_monkey.do_smth(self, arg)
             ... do smth else after
     """
-    assert '_no_monkey' not in cls.__dict__, 'Multiple monkey mix not supported'
-    cls._no_monkey = MonkeyProxy(cls)
+    assert not hasattr(cls, '_no_monkey'), 'Multiple monkey mix not supported'
+    cls._no_monkey = MonkeyProxy()
 
-    if methods is None:
-        methods = [(name, m) for name, m in mixin.__dict__.items() if inspect.isfunction(m)]
-    else:
-        methods = [(m, mixin.__dict__[m]) for m in methods]
+    test = any_fn(inspect.isfunction, inspect.ismethoddescriptor)
+    methods = select_values(test, mixin.__dict__)
 
-    for name, method in methods:
+    for name, method in methods.items():
         if hasattr(cls, name):
             setattr(cls._no_monkey, name, getattr(cls, name))
         setattr(cls, name, method)
@@ -84,7 +76,7 @@ def stamp_fields(model):
     """
     Returns serialized description of model fields.
     """
-    stamp = str([(f.name, f.attname, f.db_column, f.__class__) for f in model._meta.fields])
+    stamp = str(sorted((f.name, f.attname, f.db_column, f.__class__) for f in model._meta.fields))
     return md5hex(stamp)
 
 
@@ -93,6 +85,12 @@ def stamp_fields(model):
 def obj_key(obj):
     if isinstance(obj, models.Model):
         return '%s.%s.%s' % (obj._meta.app_label, obj._meta.model_name, obj.pk)
+    elif inspect.isfunction(obj):
+        factors = [obj.__module__, obj.__name__]
+        # Really useful to ignore this while code still in development
+        if hasattr(obj, '__code__') and not obj.__globals__.get('CACHEOPS_DEBUG'):
+            factors.append(obj.__code__.co_firstlineno)
+        return factors
     else:
         return str(obj)
 
@@ -100,17 +98,7 @@ def func_cache_key(func, args, kwargs, extra=None):
     """
     Calculate cache key based on func and arguments
     """
-    factors = [func.__module__, func.__name__, args, kwargs, extra]
-    if hasattr(func, '__code__'):
-        factors.append(func.__code__.co_firstlineno)
-    return md5hex(json.dumps(factors, sort_keys=True, default=obj_key))
-
-def debug_cache_key(func, args, kwargs, extra=None):
-    """
-    Same as func_cache_key(), but doesn't take into account function line.
-    Handy to use when editing code.
-    """
-    factors = [func.__module__, func.__name__, args, kwargs, extra]
+    factors = [func, args, kwargs, extra]
     return md5hex(json.dumps(factors, sort_keys=True, default=obj_key))
 
 def view_cache_key(func, args, kwargs, extra=None):

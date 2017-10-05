@@ -1,14 +1,10 @@
 from __future__ import absolute_import
 import warnings
+from contextlib import contextmanager
 import six
-import sys
-import traceback
 
-from funcy import decorator, identity, memoize
+from funcy import decorator, identity, memoize, LazyObject
 import redis
-from django.core.exceptions import ImproperlyConfigured
-from django.utils.module_loading import import_string
-import random
 
 from .conf import settings
 
@@ -22,80 +18,73 @@ if settings.CACHEOPS_DEGRADE_ON_FAILURE:
             warnings.warn("The cacheops cache is unreachable! Error: %s" % e, RuntimeWarning)
         except redis.TimeoutError as e:
             warnings.warn("The cacheops cache timed out! Error: %s" % e, RuntimeWarning)
-        except Exception as e:
-            warnings.warn("".join(traceback.format_exception(*sys.exc_info())))
 else:
     handle_connection_failure = identity
 
-client_class_name = getattr(settings, 'CACHEOPS_CLIENT_CLASS', None)
-client_class = import_string(client_class_name) if client_class_name else redis.StrictRedis
+
+LOCK_TIMEOUT = 60
 
 
-class SafeRedis(client_class):
+class CacheopsRedis(redis.StrictRedis):
     get = handle_connection_failure(redis.StrictRedis.get)
 
-    """ Handles failover of AWS elasticache
-    """
-    def execute_command(self, *args, **options):
-        try:
-            return super(SafeRedis, self).execute_command(*args, **options)
-        except redis.ResponseError as e:
-            if "READONLY" not in e.message:
-                raise
-            connection = self.connection_pool.get_connection(args[0], **options)
-            connection.disconnect()
-            warnings.warn("Primary probably failed over, reconnecting")
-            return super(SafeRedis, self).execute_command(*args, **options)
-
-class LazyRedis(object):
-    def _setup(self):
-        Redis = SafeRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else redis.StrictRedis
-
-        # Allow client connection settings to be specified by a URL.
-        if isinstance(settings.CACHEOPS_REDIS, six.string_types):
-            client = Redis.from_url(settings.CACHEOPS_REDIS)
+    @contextmanager
+    def getting(self, key, lock=False):
+        if not lock:
+            yield self.get(key)
         else:
-            client = Redis(**settings.CACHEOPS_REDIS)
-
-        object.__setattr__(self, '__class__', client.__class__)
-        object.__setattr__(self, '__dict__', client.__dict__)
-
-    def __getattr__(self, name):
-        self._setup()
-        return getattr(self, name)
-
-    def __setattr__(self, name, value):
-        self._setup()
-        return setattr(self, name, value)
-
-
-CacheopsRedis = SafeRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else client_class
-try:
-    # the conf could be a list of string
-    # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
-    # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
-    redis_replica_conf = settings.CACHEOPS_REDIS_REPLICA
-    if isinstance(redis_replica_conf, six.string_types):
-        redis_replicas = map(redis.StrictRedis.from_url, redis_replica_conf.split(','))
-    else:
-        redis_replicas = map(redis.StrictRedis.from_url, redis_replica_conf)
-except AttributeError as err:
-    redis_client = LazyRedis()
-else:
-    class ReplicaProxyRedis(CacheopsRedis):
-        """ Proxy `get` calls to redis replica.
-        """
-        def get(self, *args, **kwargs):
+            locked = False
             try:
-                redis_replica = random.choice(redis_replicas)
-                return redis_replica.get(*args, **kwargs)
-            except redis.ConnectionError:
-                return super(ReplicaProxyRedis, self).get(*args, **kwargs)
+                data = self._get_or_lock(key)
+                locked = data is None
+                yield data
+            finally:
+                if locked:
+                    self._release_lock(key)
 
+    @handle_connection_failure
+    def _get_or_lock(self, key):
+        self._lock = getattr(self, '_lock', self.register_script("""
+            local locked = redis.call('set', KEYS[1], 'LOCK', 'nx', 'ex', ARGV[1])
+            if locked then
+                redis.call('del', KEYS[2])
+            end
+            return locked
+        """))
+        signal_key = key + ':signal'
+
+        while True:
+            data = self.get(key)
+            if data is None:
+                if self._lock(keys=[key, signal_key], args=[LOCK_TIMEOUT]):
+                    return None
+            elif data != b'LOCK':
+                return data
+
+            # No data and not locked, wait
+            self.brpoplpush(signal_key, signal_key, timeout=LOCK_TIMEOUT)
+
+    @handle_connection_failure
+    def _release_lock(self, key):
+        self._unlock = getattr(self, '_unlock', self.register_script("""
+            if redis.call('get', KEYS[1]) == 'LOCK' then
+                redis.call('del', KEYS[1])
+            end
+            redis.call('lpush', KEYS[2], 1)
+            redis.call('expire', KEYS[2], 1)
+        """))
+        signal_key = key + ':signal'
+        self._unlock(keys=[key, signal_key])
+
+
+@LazyObject
+def redis_client():
+    # Allow client connection settings to be specified by a URL.
     if isinstance(settings.CACHEOPS_REDIS, six.string_types):
-        redis_client = ReplicaProxyRedis.from_url(settings.CACHEOPS_REDIS)
+        return CacheopsRedis.from_url(settings.CACHEOPS_REDIS)
     else:
-        redis_client = ReplicaProxyRedis(**settings.CACHEOPS_REDIS)
+        return CacheopsRedis(**settings.CACHEOPS_REDIS)
+
 
 ### Lua script loader
 
