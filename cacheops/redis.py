@@ -7,6 +7,8 @@ import traceback
 
 from funcy import decorator, identity, memoize, LazyObject
 import redis
+from django.core.exceptions import ImproperlyConfigured
+import random
 
 from .conf import settings
 
@@ -94,13 +96,43 @@ class CacheopsRedis(redis.StrictRedis):
         self._unlock(keys=[key, signal_key])
 
 
-@LazyObject
-def redis_client():
-    # Allow client connection settings to be specified by a URL.
-    if isinstance(settings.CACHEOPS_REDIS, six.string_types):
-        return CacheopsRedis.from_url(settings.CACHEOPS_REDIS)
+CacheopsRedis = CacheopsRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else redis.StrictRedis
+try:
+    # the conf could be a list of string
+    # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
+    # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
+    redis_replica_conf = settings.CACHEOPS_REDIS_REPLICA
+    if isinstance(redis_replica_conf, six.string_types):
+        redis_replicas = map(redis.StrictRedis.from_url, redis_replica_conf.split(','))
     else:
-        return CacheopsRedis(**settings.CACHEOPS_REDIS)
+        redis_replicas = map(redis.StrictRedis.from_url, redis_replica_conf)
+except AttributeError as err:
+    @LazyObject
+    def redis_client():
+        # Allow client connection settings to be specified by a URL.
+        if isinstance(settings.CACHEOPS_REDIS, six.string_types):
+            return CacheopsRedis.from_url(settings.CACHEOPS_REDIS)
+        else:
+            return CacheopsRedis(**settings.CACHEOPS_REDIS)
+
+else:
+
+    class ReplicaProxyRedis(CacheopsRedis):
+        """ Proxy `get` calls to redis replica.
+        """
+
+        def get(self, *args, **kwargs):
+            try:
+                redis_replica = random.choice(redis_replicas)
+                return redis_replica.get(*args, **kwargs)
+            except redis.ConnectionError:
+                return super(ReplicaProxyRedis, self).get(*args, **kwargs)
+
+
+    if isinstance(settings.CACHEOPS_REDIS, six.string_types):
+            redis_client = ReplicaProxyRedis.from_url(settings.CACHEOPS_REDIS)
+    else:
+            redis_client = ReplicaProxyRedis(**settings.CACHEOPS_REDIS)
 
 
 ### Lua script loader
