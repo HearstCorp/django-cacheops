@@ -28,7 +28,6 @@ from .invalidation import invalidate_obj, invalidate_dict, no_invalidation
 from .transaction import in_transaction
 from .signals import cache_read
 
-
 __all__ = ('cached_as', 'cached_view_as', 'install_cacheops')
 
 _local_get_cache = {}
@@ -256,11 +255,13 @@ class QuerySetMixin(object):
 
         cache_key = self._cache_key()
         if not self._cacheprofile['write_only'] and not self._for_write:
-            # Trying get data from cache
-            cache_data = redis_client.get(cache_key)
-            cache_read.send(sender=self.model, func=None, hit=cache_data is not None)
-            if cache_data is not None:
-                return iter(pickle.loads(cache_data))
+            # Try to get data from cache - first check the invalidation conjunction sets
+            dnfs_json = json.dumps(dnfs(self), default=str)
+            if load_script('check_conj')(keys=[cache_key], args=[dnfs_json]):
+                cache_data = redis_client.get(cache_key)
+                cache_read.send(sender=self.model, func=None, hit=cache_data is not None)
+                if cache_data is not None:
+                    return iter(pickle.loads(cache_data))
 
         # Cache miss - fetch data from overriden implementation
         def iterate():
