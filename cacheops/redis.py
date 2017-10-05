@@ -24,7 +24,7 @@ if settings.CACHEOPS_DEGRADE_ON_FAILURE:
     def handle_connection_failure(call):
         """Skip Redis calls for a configurable period after a timeout."""
         global circuit_breaker_opened
-        if circuit_breaker_opened:
+        if settings.FEATURE_CACHEOPS_CIRCUIT_BREAKER and circuit_breaker_opened:
 
             # Circuit breaker is open! Should we close it yet?
             if time() - circuit_breaker_opened > settings.REDIS_CIRCUIT_BREAKER_RESET_SECONDS:
