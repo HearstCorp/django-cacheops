@@ -2,8 +2,8 @@ from __future__ import absolute_import
 import warnings
 from contextlib import contextmanager
 import six
-import sys
-import traceback
+from time import time
+import logging
 
 from funcy import decorator, identity, memoize, LazyObject
 import redis
@@ -12,18 +12,29 @@ import random
 
 from .conf import settings
 
+logger = logging.getLogger(__name__)
+
+circuit_tripped = None
 
 if settings.CACHEOPS_DEGRADE_ON_FAILURE:
     @decorator
     def handle_connection_failure(call):
+        global circuit_tripped
+        if circuit_tripped:
+            if time() - circuit_tripped > settings.REDIS_CIRCUIT_BREAKER_RESET_SECONDS:
+                logger.info("Resetting Redis circuit breaker")
+                circuit_tripped = None
+            else:
+                logger.debug("Redis circuit breaker is open! Skipping Redis call")
+                return
         try:
             return call()
-        except redis.ConnectionError as e:
-            warnings.warn("The cacheops cache is unreachable! Error: %s" % e, RuntimeWarning)
-        except redis.TimeoutError as e:
-            warnings.warn("The cacheops cache timed out! Error: %s" % e, RuntimeWarning)
+        except redis.RedisError as e:
+            logger.warn("The cacheops cache is unreachable! Error: %s" % e)
+            logger.info("Tripping Redis circuit breaker")
+            circuit_tripped = time()
         except Exception as e:
-            warnings.warn("".join(traceback.format_exception(*sys.exc_info())))
+            logger.warn(e)
 else:
     handle_connection_failure = identity
 
