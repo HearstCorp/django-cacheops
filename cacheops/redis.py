@@ -46,12 +46,12 @@ def set_redis_replicas():
         temp = settings.REDIS_REPLICAS.split(',')
     else:
         temp = list(settings.REDIS_REPLICAS)
-    master_url = settings.REDIS_MASTER
-    master_ip = ip(master_url)
-    temp = [r for r in temp if ip(r) != master_ip]
+    primary_url = settings.REDIS_MASTER
+    primary_ip = ip(primary_url)
+    temp = [r for r in temp if ip(r) != primary_ip]
     temp = map(redis.StrictRedis.from_url, temp)
     temp = [r for r in temp for _ in range(settings.REDIS_REPLICA_WEIGHT)]
-    temp.append(redis.StrictRedis.from_url(master_url))
+    temp.append(redis.StrictRedis.from_url(primary_url))
     redis_replicas = temp
 
 
