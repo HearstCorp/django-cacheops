@@ -45,18 +45,27 @@ def set_redis_replicas():
     # the conf could be a list or string
     # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
     # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
-    global redis_replicas
-    if isinstance(settings.REDIS_REPLICAS, six.string_types):
-        temp = settings.REDIS_REPLICAS.split(',')
-    else:
-        temp = list(settings.REDIS_REPLICAS)
     primary_url = settings.REDIS_MASTER
     primary_ip = ip(primary_url)
-    temp = [r for r in temp if ip(r) != primary_ip]
-    temp = map(redis.StrictRedis.from_url, temp)
-    temp = [r for r in temp for _ in range(settings.REDIS_REPLICA_WEIGHT)]
-    temp.append(redis.StrictRedis.from_url(primary_url))
-    redis_replicas = temp
+    redis_urls = settings.REDIS_REPLICAS
+    if isinstance(redis_urls, six.string_types):
+        redis_urls = redis_urls.split(',')
+    else:
+        redis_urls = list(redis_urls)
+    replica_weight = settings.REDIS_REPLICA_WEIGHT
+
+    # Make Redis clients from all the URLs except the primary
+    new_read_clients = [redis.StrictRedis.from_url(u) for u in redis_urls if ip(u) != primary_ip]
+
+    # Duplicate each client a few times if desired
+    if replica_weight > 1:
+        new_read_clients = [c for c in new_read_clients for _ in range(replica_weight)]
+
+    # Add just one Redis client for the primary
+    new_read_clients.append(redis.StrictRedis.from_url(primary_url))
+
+    global redis_replicas
+    redis_replicas = new_read_clients
 
 
 class SafeRedis(client_class):
