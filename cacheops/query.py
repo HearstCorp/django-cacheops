@@ -27,6 +27,7 @@ from .tree import dnfs
 from .invalidation import invalidate_obj, invalidate_dict, no_invalidation
 from .transaction import in_transaction
 from .signals import cache_read
+from .local import thread_local
 
 __all__ = ('cached_as', 'cached_view_as', 'install_cacheops')
 
@@ -247,6 +248,12 @@ class QuerySetMixin(object):
             clone._cloning = self._cloning - 1 if self._cloning else 0
             return clone
 
+    def cache_key_in_conj_sets(self, cache_key):
+        if not getattr(thread_local, 'fast_invalidation', False):
+            return True
+        dnfs_json = json.dumps(dnfs(self), default=str)
+        return load_script('check_conj')(keys=[cache_key], args=[dnfs_json])
+
     def iterator(self):
         # If cache is not enabled or in transaction just fall back
         if not self._cacheprofile or 'fetch' not in self._cacheprofile['ops'] \
@@ -256,8 +263,7 @@ class QuerySetMixin(object):
         cache_key = self._cache_key()
         if not self._cacheprofile['write_only'] and not self._for_write:
             # Try to get data from cache - first check the invalidation conjunction sets
-            dnfs_json = json.dumps(dnfs(self), default=str)
-            if load_script('check_conj')(keys=[cache_key], args=[dnfs_json]):
+            if self.cache_key_in_conj_sets(cache_key):
                 cache_data = redis_client.get(cache_key)
                 cache_read.send(sender=self.model, func=None, hit=cache_data is not None)
                 if cache_data is not None:
