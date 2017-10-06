@@ -6,6 +6,7 @@ import ctypes
 import logging
 import mmap
 import os
+import stat
 from time import time
 
 from funcy import decorator, identity, memoize, LazyObject
@@ -17,14 +18,33 @@ from .conf import settings
 
 logger = logging.getLogger(__name__)
 
-# Global circuit-breaker flag. Values:
+# Global circuit-breaker flag, implemented as an mmapped temp file. Values:
 #   0 = circuit breaker closed, Redis calls are attempted.
 #   <time_seconds> = circuit breaker open, Redis calls are skipped.
+
+CIRCUIT_BREAKER_FILENAME = "/tmp/redis_circuit_breaker"
+
+
+def open_cb_file(extra_flags=0):
+    return os.open(CIRCUIT_BREAKER_FILENAME, os.O_RDWR | extra_flags, stat.S_IRUSR | stat.S_IWUSR)
+
+
+def open_or_create_cb_file():
+    try:
+        fd = open_cb_file()
+    except OSError as e:
+        if e.strerror.startswith("No such file"):
+            fd = open_cb_file(os.O_CREAT | os.O_NOATIME)
+            os.write(fd, '\x00' * 1024)
+        else:
+            raise
+    return fd
+
+
 try:
-    fd = os.open('/tmp/redis_circuit_breaker', os.O_RDWR)
+    fd = open_or_create_cb_file()
     buf = mmap.mmap(fd, 1024)
 except (OSError, ValueError):
-    logger.warn("Mmap's not working, Redis circuit breaker will be local")
     circuit_breaker = lambda: None  # noqa: E731
     circuit_breaker.value = 0
 else:
