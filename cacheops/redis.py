@@ -49,8 +49,7 @@ if settings.CACHEOPS_DEGRADE_ON_FAILURE:
             return call()
         except redis.RedisError as e:
             # Redis timed out! Let's open the circuit breaker
-            logger.warn("The cacheops cache is unreachable! Error: %s" % e)
-            logger.info("Opening Redis circuit breaker")
+            logger.warn("The cache is unreachable! Opening Redis circuit breaker. Error: %s", e)
             circuit_breaker.value = int(time())
         except Exception as e:
             logger.warn(e)
