@@ -30,7 +30,7 @@ else:
 
 client_class_name = getattr(settings, 'CACHEOPS_CLIENT_CLASS', None)
 client_class = import_string(client_class_name) if client_class_name else redis.StrictRedis
-redis_replicas = []
+read_clients = []
 
 
 def ip(url):
@@ -41,18 +41,19 @@ def ip(url):
         raise
 
 
-def set_redis_replicas():
+def set_read_clients():
+    primary_url = settings.REDIS_MASTER
+    primary_ip = ip(primary_url)
+    replica_weight = settings.REDIS_REPLICA_WEIGHT
+
+    redis_urls = settings.REDIS_REPLICAS
     # the conf could be a list or string
     # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
     # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
-    primary_url = settings.REDIS_MASTER
-    primary_ip = ip(primary_url)
-    redis_urls = settings.REDIS_REPLICAS
     if isinstance(redis_urls, six.string_types):
         redis_urls = redis_urls.split(',')
     else:
         redis_urls = list(redis_urls)
-    replica_weight = settings.REDIS_REPLICA_WEIGHT
 
     # Make Redis clients from all the URLs except the primary
     new_read_clients = [redis.StrictRedis.from_url(u) for u in redis_urls if ip(u) != primary_ip]
@@ -64,8 +65,8 @@ def set_redis_replicas():
     # Add just one Redis client for the primary
     new_read_clients.append(redis.StrictRedis.from_url(primary_url))
 
-    global redis_replicas
-    redis_replicas = new_read_clients
+    global read_clients
+    read_clients = new_read_clients
 
 
 class SafeRedis(client_class):
@@ -80,7 +81,7 @@ class SafeRedis(client_class):
                 raise
             connection = self.connection_pool.get_connection(args[0], **options)
             connection.disconnect()
-            set_redis_replicas()
+            set_read_clients()
             warnings.warn("Primary probably failed over, reconnecting")
             return super(SafeRedis, self).execute_command(*args, **options)
 
@@ -108,7 +109,7 @@ class LazyRedis(object):
 
 CacheopsRedis = SafeRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else client_class
 try:
-    set_redis_replicas()
+    set_read_clients()
 except AttributeError as err:
     redis_client = LazyRedis()
 else:
@@ -116,8 +117,8 @@ else:
         """Proxy `get` calls to redis replica."""
         def get(self, *args, **kwargs):
             try:
-                redis_replica = random.choice(redis_replicas)
-                return redis_replica.get(*args, **kwargs)
+                client = random.choice(read_clients)
+                return client.get(*args, **kwargs)
             except redis.ConnectionError:
                 return super(ReplicaProxyRedis, self).get(*args, **kwargs)
 
