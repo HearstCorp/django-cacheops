@@ -34,7 +34,11 @@ redis_replicas = []
 
 
 def ip(url):
-    return socket.gethostbyname(urlparse(url).hostname)
+    try:
+        return socket.gethostbyname(urlparse(url).hostname)
+    except socket.gaierror:
+        warnings.warn('Hostname in URL %s did not resolve' % url)
+        raise
 
 
 def set_redis_replicas():
