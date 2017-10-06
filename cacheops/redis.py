@@ -42,9 +42,9 @@ if settings.CACHEOPS_DEGRADE_ON_FAILURE:
                 logger.info("Closing Redis circuit breaker")
                 circuit_breaker.value = 0
             else:
-                # No, just skip this Redis call
+                # No, just skip this Redis call and emulate a cache miss
                 logger.debug("Redis circuit breaker is open! Skipping Redis call")
-                return
+                return None
         try:
             return call()
         except redis.RedisError as e:
