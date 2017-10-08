@@ -24,7 +24,7 @@ def invalidate_dict(model, obj_dict):
     if no_invalidation.active or not settings.CACHEOPS_ENABLED:
         return
     model = non_proxy(model)
-    load_script('invalidate')(args=[
+    renamed_keys = load_script('invalidate')(args=[
         model._meta.db_table,
         json.dumps(obj_dict, default=str)
     ])
