@@ -2,85 +2,41 @@ from __future__ import absolute_import
 import warnings
 from contextlib import contextmanager
 import six
-import ctypes
-import logging
-import mmap
-import os
-import stat
-from time import time
+import sys
+import traceback
 
 from funcy import decorator, identity, memoize, LazyObject
 import redis
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.module_loading import import_string
 import random
 
 from .conf import settings
 
-logger = logging.getLogger(__name__)
-
-# Global circuit-breaker flag, implemented as an mmapped temp file. Values:
-#   0 = circuit breaker closed, Redis calls are attempted.
-#   <time_seconds> = circuit breaker open, Redis calls are skipped.
-
-CIRCUIT_BREAKER_FILENAME = "/tmp/redis_circuit_breaker"
-
-
-def open_cb_file(extra_flags=0):
-    return os.open(CIRCUIT_BREAKER_FILENAME, os.O_RDWR | extra_flags, stat.S_IRUSR | stat.S_IWUSR)
-
-
-def open_or_create_cb_file():
-    try:
-        fd = open_cb_file()
-    except OSError as e:
-        if e.strerror.startswith("No such file"):
-            fd = open_cb_file(os.O_CREAT | os.O_NOATIME)
-            os.write(fd, '\x00' * 1024)
-        else:
-            raise
-    return fd
-
-
-try:
-    fd = open_or_create_cb_file()
-    buf = mmap.mmap(fd, 1024)
-except (OSError, ValueError):
-    circuit_breaker = lambda: None  # noqa: E731
-    circuit_breaker.value = 0
-else:
-    circuit_breaker = ctypes.c_int.from_buffer(buf)
-
 if settings.CACHEOPS_DEGRADE_ON_FAILURE:
     @decorator
     def handle_connection_failure(call):
-        """Skip Redis calls for a configurable period after a timeout."""
-        if settings.FEATURE_CACHEOPS_CIRCUIT_BREAKER and circuit_breaker.value:
-
-            # Circuit breaker is open! Should we close it yet?
-            if time() - circuit_breaker.value > settings.REDIS_CIRCUIT_BREAKER_RESET_SECONDS:
-                # Yes, let's close the circuit breaker
-                logger.info("Closing Redis circuit breaker")
-                circuit_breaker.value = 0
-            else:
-                # No, just skip this Redis call and emulate a cache miss
-                logger.debug("Redis circuit breaker is open! Skipping Redis call")
-                return None
         try:
             return call()
-        except redis.RedisError as e:
-            # Redis timed out! Let's open the circuit breaker
-            logger.warn("The cache is unreachable! Opening Redis circuit breaker. Error: %s", e)
-            circuit_breaker.value = int(time())
+        except redis.ConnectionError as e:
+            warnings.warn("The cacheops cache is unreachable! Error: %s" % e, RuntimeWarning)
+        except redis.TimeoutError as e:
+            warnings.warn("The cacheops cache timed out! Error: %s" % e, RuntimeWarning)
         except Exception as e:
-            logger.warn(e)
+            warnings.warn("".join(traceback.format_exception(*sys.exc_info())))
 else:
     handle_connection_failure = identity
+
+client_class = redis.StrictRedis
+custom_client_class = getattr(settings, 'CACHEOPS_CLIENT_CLASS', None)
+if custom_client_class:
+    client_class = import_string(custom_client_class)
 
 
 LOCK_TIMEOUT = 60
 
 
-class CacheopsRedis(redis.StrictRedis):
+class CacheopsRedis(client_class):
     get = handle_connection_failure(redis.StrictRedis.get)
 
     """ Handles failover of AWS elasticache
@@ -145,7 +101,7 @@ class CacheopsRedis(redis.StrictRedis):
         self._unlock(keys=[key, signal_key])
 
 
-CacheopsRedis = CacheopsRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else redis.StrictRedis
+CacheopsRedis = CacheopsRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else client_class
 try:
     # the conf could be a list of string
     # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
