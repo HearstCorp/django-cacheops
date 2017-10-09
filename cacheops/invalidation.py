@@ -17,6 +17,8 @@ from .transaction import queue_when_in_transaction
 
 __all__ = ('invalidate_obj', 'invalidate_model', 'invalidate_all', 'no_invalidation')
 
+delete_invalidated_keys = getattr(settings, 'CACHEOPS_CLEANUP_FN', lambda keys: None)
+
 
 @queue_when_in_transaction
 @handle_connection_failure
@@ -28,6 +30,7 @@ def invalidate_dict(model, obj_dict):
         model._meta.db_table,
         json.dumps(obj_dict, default=str)
     ])
+    delete_invalidated_keys(renamed_keys)
 
 
 def invalidate_obj(obj):
