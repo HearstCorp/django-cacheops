@@ -1,8 +1,10 @@
 from __future__ import absolute_import
 import warnings
 import six
+import socket
 import sys
 import traceback
+from urlparse import urlparse
 
 from funcy import decorator, identity, memoize
 import redis
@@ -11,7 +13,6 @@ from django.utils.module_loading import import_string
 import random
 
 from .conf import settings
-
 
 if settings.CACHEOPS_DEGRADE_ON_FAILURE:
     @decorator
@@ -29,14 +30,50 @@ else:
 
 client_class_name = getattr(settings, 'CACHEOPS_CLIENT_CLASS', None)
 client_class = import_string(client_class_name) if client_class_name else redis.StrictRedis
+read_clients = []
+
+
+def ip(url):
+    try:
+        return socket.gethostbyname(urlparse(url).hostname)
+    except socket.gaierror:
+        warnings.warn('Hostname in URL %s did not resolve' % url)
+        raise
+
+
+def set_read_clients():
+    primary_url = settings.REDIS_MASTER
+    primary_ip = ip(primary_url)
+    replica_weight = settings.REDIS_REPLICA_WEIGHT
+
+    redis_urls = settings.REDIS_REPLICAS
+    # the conf could be a list or string
+    # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
+    # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
+    if isinstance(redis_urls, six.string_types):
+        redis_urls = redis_urls.split(',')
+    else:
+        redis_urls = list(redis_urls)
+
+    # Make Redis clients from all the URLs except the primary
+    new_read_clients = [redis.StrictRedis.from_url(u) for u in redis_urls if ip(u) != primary_ip]
+
+    # Duplicate each client a few times if desired
+    if replica_weight > 1:
+        new_read_clients = [c for c in new_read_clients for _ in range(replica_weight)]
+
+    # Add just one Redis client for the primary
+    new_read_clients.append(redis.StrictRedis.from_url(primary_url))
+
+    global read_clients
+    read_clients = new_read_clients
 
 
 class SafeRedis(client_class):
     get = handle_connection_failure(redis.StrictRedis.get)
 
-    """ Handles failover of AWS elasticache
-    """
     def execute_command(self, *args, **options):
+        """ Handle failover of AWS elasticache."""
         try:
             return super(SafeRedis, self).execute_command(*args, **options)
         except redis.ResponseError as e:
@@ -44,8 +81,10 @@ class SafeRedis(client_class):
                 raise
             connection = self.connection_pool.get_connection(args[0], **options)
             connection.disconnect()
+            set_read_clients()
             warnings.warn("Primary probably failed over, reconnecting")
             return super(SafeRedis, self).execute_command(*args, **options)
+
 
 class LazyRedis(object):
     def _setup(self):
@@ -68,27 +107,18 @@ class LazyRedis(object):
         self._setup()
         return setattr(self, name, value)
 
-
 CacheopsRedis = SafeRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else client_class
 try:
-    # the conf could be a list of string
-    # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
-    # string would be: "redis://cache-001:6379/1,redis://cache-002:6379/2"
-    redis_replica_conf = settings.CACHEOPS_REDIS_REPLICA
-    if isinstance(redis_replica_conf, six.string_types):
-        redis_replicas = map(redis.StrictRedis.from_url, redis_replica_conf.split(','))
-    else:
-        redis_replicas = map(redis.StrictRedis.from_url, redis_replica_conf)
+    set_read_clients()
 except AttributeError as err:
     redis_client = LazyRedis()
 else:
     class ReplicaProxyRedis(CacheopsRedis):
-        """ Proxy `get` calls to redis replica.
-        """
+        """Proxy `get` calls to redis replica."""
         def get(self, *args, **kwargs):
             try:
-                redis_replica = random.choice(redis_replicas)
-                return redis_replica.get(*args, **kwargs)
+                client = random.choice(read_clients)
+                return client.get(*args, **kwargs)
             except redis.ConnectionError:
                 return super(ReplicaProxyRedis, self).get(*args, **kwargs)
 
