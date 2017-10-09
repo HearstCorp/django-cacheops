@@ -248,7 +248,7 @@ class QuerySetMixin(object):
             clone._cloning = self._cloning - 1 if self._cloning else 0
             return clone
 
-    def cache_key_in_conj_sets(self, cache_key):
+    def cache_key_is_in_conj_sets(self, cache_key):
         if not getattr(thread_local, 'fast_invalidation', False):
             return True
         dnfs_json = json.dumps(dnfs(self), default=str)
@@ -263,7 +263,7 @@ class QuerySetMixin(object):
         cache_key = self._cache_key()
         if not self._cacheprofile['write_only'] and not self._for_write:
             # Try to get data from cache - first check the invalidation conjunction sets
-            if self.cache_key_in_conj_sets(cache_key):
+            if self.cache_key_is_in_conj_sets(cache_key):
                 cache_data = redis_client.get(cache_key)
                 cache_read.send(sender=self.model, func=None, hit=cache_data is not None)
                 if cache_data is not None:

@@ -17,7 +17,20 @@ from .transaction import queue_when_in_transaction
 
 __all__ = ('invalidate_obj', 'invalidate_model', 'invalidate_all', 'no_invalidation')
 
-delete_invalidated_keys = getattr(settings, 'CACHEOPS_CLEANUP_FN', lambda keys: None)
+
+def delete_invalid_caches(conj_keys):
+    for conj_key in conj_keys:
+        i = 0
+        while True:
+            i, cache_keys = redis_client.sscan(conj_key, cursor=i, count=1000)
+            if cache_keys:
+                redis_client.srem(conj_key, *cache_keys)
+                redis_client.delete(*cache_keys)
+            if i == 0:
+                break
+    redis_client.delete(*conj_keys)
+
+cleanup_fn = getattr(settings, 'CACHEOPS_CLEANUP_FN', delete_invalid_caches)
 
 
 @queue_when_in_transaction
@@ -30,7 +43,7 @@ def invalidate_dict(model, obj_dict):
         model._meta.db_table,
         json.dumps(obj_dict, default=str)
     ])
-    delete_invalidated_keys(renamed_keys)
+    cleanup_fn(renamed_keys)
 
 
 def invalidate_obj(obj):
