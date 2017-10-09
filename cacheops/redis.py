@@ -101,7 +101,10 @@ class CacheopsRedis(client_class):
         self._unlock(keys=[key, signal_key])
 
 
-CacheopsRedis = CacheopsRedis if settings.CACHEOPS_DEGRADE_ON_FAILURE else client_class
+# Compromise on naming conventions to preserve max. similarity with v4.
+if not settings.CACHEOPS_DEGRADE_ON_FAILURE:
+    CacheopsRedis = client_class
+
 try:
     # the conf could be a list of string
     # list would look like: ["redis://cache-001:6379/1", "redis://cache-002:6379/2"]
