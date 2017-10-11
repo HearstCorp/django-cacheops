@@ -20,13 +20,13 @@ __all__ = ('invalidate_obj', 'invalidate_model', 'invalidate_all', 'no_invalidat
 
 def delete_invalid_caches(conj_keys):
     for conj_key in conj_keys:
-        i = 0
+        offset = 0
         while True:
-            i, cache_keys = redis_client.sscan(conj_key, cursor=i, count=1000)
+            offset, cache_keys = redis_client.sscan(conj_key, cursor=offset, count=1000)
             if cache_keys:
                 redis_client.srem(conj_key, *cache_keys)
                 redis_client.delete(*cache_keys)
-            if i == 0:
+            if offset == 0:
                 break
     redis_client.delete(*conj_keys)
 
