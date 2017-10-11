@@ -71,8 +71,9 @@ if settings.CACHEOPS_REDIS_REPLICAS:
             if replica_weight > 1:
                 new_clients = [c for c in new_clients for _ in range(replica_weight)]
 
-            # Add just one Redis client for the primary
-            new_clients.append(read_client_class(**settings.CACHEOPS_REDIS))
+            # Add just one Redis client for the primary, if it was in the replicas
+            if len(new_clients) < len(replicas):
+                new_clients.append(read_client_class(**settings.CACHEOPS_REDIS))
 
             cls.read_clients = new_clients
 
