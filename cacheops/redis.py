@@ -19,17 +19,10 @@ from .conf import settings
 
 handle_connection_failure = identity
 
+primary = settings.CACHEOPS_REDIS
+
 client_class_name = getattr(settings, 'CACHEOPS_CLIENT_CLASS', None)
 client_class = import_string(client_class_name) if client_class_name else redis.StrictRedis
-
-
-def ip(hostname):
-    try:
-        return socket.gethostbyname(hostname)
-    except socket.gaierror as err:
-        warnings.warn('Hostname %s did not resolve because %s' % (hostname, err))
-        raise
-
 
 if settings.CACHEOPS_DEGRADE_ON_FAILURE:
 
@@ -60,20 +53,22 @@ if settings.CACHEOPS_REDIS_REPLICAS:
 
         @classmethod
         def set_read_clients(cls):
-            primary_ip = ip(settings.CACHEOPS_REDIS['host'])
+            primary_ip = ip(primary['host'])
             replicas = settings.CACHEOPS_REDIS_REPLICAS
             replica_weight = settings.CACHEOPS_REPLICA_WEIGHT
 
-            # Make Redis clients from all the URLs except the primary
+            # Make Redis clients from all the replicas except the primary
             new_clients = [read_client_class(**r) for r in replicas if ip(r['host']) != primary_ip]
+
+            # Make a list with one client for the primary, if it was removed from the replicas
+            primary_client = [read_client_class(**primary)] * (len(new_clients) < len(replicas))
 
             # Duplicate each client a few times if desired
             if replica_weight > 1:
                 new_clients = [c for c in new_clients for _ in range(replica_weight)]
 
-            # Add just one Redis client for the primary, if it was in the replicas
-            if len(new_clients) < len(replicas):
-                new_clients.append(read_client_class(**settings.CACHEOPS_REDIS))
+            # Add back the Redis client for the primary, if it was removed from the replicas
+            new_clients += primary_client
 
             cls.read_clients = new_clients
 
@@ -102,10 +97,10 @@ if settings.CACHEOPS_REDIS_REPLICAS:
 
     client_class = ReplicaProxyRedis
 
-if isinstance(settings.CACHEOPS_REDIS, six.string_types):
-    redis_client = client_class.from_url(settings.CACHEOPS_REDIS)
+if isinstance(primary, six.string_types):
+    redis_client = client_class.from_url(primary)
 else:
-    redis_client = client_class(**settings.CACHEOPS_REDIS)
+    redis_client = client_class(**primary)
 
 
 # Lua script loader
@@ -121,3 +116,11 @@ def load_script(name, strip=False):
     if strip:
         code = STRIP_RE.sub('', code)
     return redis_client.register_script(code)
+
+
+def ip(hostname):
+    try:
+        return socket.gethostbyname(hostname)
+    except socket.gaierror as err:
+        warnings.warn('Hostname %s did not resolve because %s' % (hostname, err))
+        raise
