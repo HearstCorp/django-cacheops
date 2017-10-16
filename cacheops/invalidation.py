@@ -8,6 +8,7 @@ try:
     from django.db.models.expressions import ExpressionNode as Expression
 except ImportError:
     from django.db.models.expressions import Expression
+from django.utils.module_loading import import_string
 
 from .conf import settings
 from .utils import non_proxy, NOT_SERIALIZED_FIELDS
@@ -30,8 +31,6 @@ def delete_invalid_caches(conj_keys):
                 break
     redis_client.delete(*conj_keys)
 
-cleanup_fn = getattr(settings, 'CACHEOPS_CLEANUP_FN', delete_invalid_caches)
-
 
 @queue_when_in_transaction
 @handle_connection_failure
@@ -43,7 +42,15 @@ def invalidate_dict(model, obj_dict):
         model._meta.db_table,
         json.dumps(obj_dict, default=str)
     ])
-    cleanup_fn(renamed_keys)
+    load_cleanup_fn()(renamed_keys)
+
+
+@memoize
+def load_cleanup_fn():
+    try:
+        return import_string(settings.CACHEOPS_CLEANUP_FN)
+    except ImportError:
+        return delete_invalid_caches
 
 
 def invalidate_obj(obj):
