@@ -14,6 +14,7 @@ class Settings(object):
     CACHEOPS_REDIS = {}
     CACHEOPS_REDIS_REPLICAS = []
     CACHEOPS_REPLICA_WEIGHT = 1
+    CACHEOPS_CLEANUP_FN = None
     CACHEOPS_DEFAULTS = {}
     CACHEOPS = {}
     CACHEOPS_LRU = False

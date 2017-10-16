@@ -50,8 +50,9 @@ def invalidate_dict(model, obj_dict):
 @memoize
 def load_cleanup_fn():
     try:
+        assert settings.CACHEOPS_CLEANUP_FN
         return import_string(settings.CACHEOPS_CLEANUP_FN)
-    except ImportError:
+    except (AssertionError, ImportError):
         return delete_invalid_caches
 
 
