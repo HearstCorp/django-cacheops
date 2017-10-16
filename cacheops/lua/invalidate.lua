@@ -1,5 +1,6 @@
 local db_table = ARGV[1]
-local obj = cjson.decode(ARGV[2])
+local random = ARGV[2]
+local obj = cjson.decode(ARGV[3])
 
 
 -- Utility functions
@@ -21,7 +22,7 @@ local renamed_keys = {}
 local schemes = redis.call('smembers', 'schemes:' .. db_table)
 for _, scheme in ipairs(schemes) do
     local key = conj_cache_key(db_table, scheme, obj)
-    local new_key = key .. '.delete'
+    local new_key = key .. '.' .. random .. '.delete'
     pcall(rename_key, key, new_key)
     table.insert(renamed_keys, new_key)
 end

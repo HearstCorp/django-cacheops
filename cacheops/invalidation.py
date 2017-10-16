@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+import random
 import threading
 from funcy import memoize, post_processing, ContextDecorator
 from django.db.models.expressions import F
@@ -40,6 +41,7 @@ def invalidate_dict(model, obj_dict):
     model = non_proxy(model)
     renamed_keys = load_script('invalidate')(args=[
         model._meta.db_table,
+        '%08x' % random.randrange(16**8),
         json.dumps(obj_dict, default=str)
     ])
     load_cleanup_fn()(renamed_keys)
