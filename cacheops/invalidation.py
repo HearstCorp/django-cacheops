@@ -19,12 +19,14 @@ from .transaction import queue_when_in_transaction
 
 __all__ = ('invalidate_obj', 'invalidate_model', 'invalidate_all', 'no_invalidation')
 
+BATCH_SIZE = settings.CACHEOPS_CLEANUP_BATCH_SIZE
+
 
 def delete_invalid_caches(conj_keys):
     for conj_key in conj_keys:
         offset = 0
         while True:
-            offset, cache_keys = redis_client.sscan(conj_key, cursor=offset, count=1000)
+            offset, cache_keys = redis_client.sscan(conj_key, cursor=offset, count=BATCH_SIZE)
             if cache_keys:
                 redis_client.srem(conj_key, *cache_keys)
                 redis_client.delete(*cache_keys)
