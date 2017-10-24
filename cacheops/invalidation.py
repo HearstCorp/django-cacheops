@@ -33,27 +33,41 @@ def delete_invalid_caches(conj_keys):
     redis_client.delete(*conj_keys)
 
 
-@queue_when_in_transaction
-@handle_connection_failure
-def invalidate_dict(model, obj_dict):
-    if no_invalidation.active or not settings.CACHEOPS_ENABLED:
-        return
-    model = non_proxy(model)
-    renamed_keys = load_script('invalidate')(args=[
-        model._meta.db_table,
-        '%08x' % random.randrange(16**8),
-        json.dumps(obj_dict, default=str)
-    ])
-    load_cleanup_fn()(renamed_keys)
+if settings.FEATURE_FAST_INVALIDATION:
 
+    @queue_when_in_transaction
+    @handle_connection_failure
+    def invalidate_dict(model, obj_dict):
+        if no_invalidation.active or not settings.CACHEOPS_ENABLED:
+            return
+        model = non_proxy(model)
+        renamed_keys = load_script('fast_invalidate')(args=[
+            model._meta.db_table,
+            '%08x' % random.randrange(16**8),
+            json.dumps(obj_dict, default=str)
+        ])
+        load_cleanup_fn()(renamed_keys)
 
-@memoize
-def load_cleanup_fn():
-    try:
-        assert settings.CACHEOPS_CLEANUP_FN
-        return import_string(settings.CACHEOPS_CLEANUP_FN)
-    except (AssertionError, ImportError):
-        return delete_invalid_caches
+    @memoize
+    def load_cleanup_fn():
+        try:
+            assert settings.CACHEOPS_CLEANUP_FN
+            return import_string(settings.CACHEOPS_CLEANUP_FN)
+        except (AssertionError, ImportError):
+            return delete_invalid_caches
+
+else:
+
+    @queue_when_in_transaction
+    @handle_connection_failure
+    def invalidate_dict(model, obj_dict):
+        if no_invalidation.active or not settings.CACHEOPS_ENABLED:
+            return
+        model = non_proxy(model)
+        load_script('invalidate')(args=[
+            model._meta.db_table,
+            json.dumps(obj_dict, default=str)
+        ])
 
 
 def invalidate_obj(obj):
