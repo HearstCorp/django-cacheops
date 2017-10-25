@@ -18,6 +18,9 @@ class Settings(object):
     CACHEOPS = {}
     CACHEOPS_LRU = False
     CACHEOPS_DEGRADE_ON_FAILURE = False
+    FEATURE_FAST_INVALIDATION = False
+    CACHEOPS_CLEANUP_FN = None
+    CACHEOPS_CLEANUP_BATCH_SIZE = 1000
     FILE_CACHE_DIR = '/tmp/cacheops_file_cache'
     FILE_CACHE_TIMEOUT = 60*60*24*30
 
