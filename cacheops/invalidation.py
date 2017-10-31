@@ -48,7 +48,8 @@ if settings.FEATURE_FAST_INVALIDATION:
             '%08x' % random.randrange(16**8),
             json.dumps(obj_dict, default=str)
         ])
-        load_cleanup_fn()(renamed_keys)
+        if renamed_keys:
+            load_cleanup_fn()(renamed_keys)
 
     @memoize
     def load_cleanup_fn():
