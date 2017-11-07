@@ -7,7 +7,7 @@ from django.db.models.query import QuerySet
 from django.db.models.sql import OR
 from django.db.models.sql.query import Query, ExtraWhere
 from django.db.models.sql.where import NothingNode, SubqueryConstraint
-from django.db.models.lookups import Lookup, Exact, In, IsNull
+from django.db.models.lookups import Lookup, Exact, IExact, In, IsNull
 # This thing existed in Django 1.8 and earlier
 try:
     from django.db.models.sql.where import EverythingNode
@@ -27,6 +27,7 @@ except ImportError:
     class Join(object):
         pass
 
+from .conf import settings
 from .utils import NOT_SERIALIZED_FIELDS
 
 
@@ -66,12 +67,15 @@ def dnfs(qs):
                 return SOME_TREE
 
             attname = where.lhs.target.attname
+            alias = where.lhs.alias
             if isinstance(where, Exact):
-                return [[(where.lhs.alias, attname, where.rhs, True)]]
+                return [[(alias, attname, where.rhs, True)]]
+            elif isinstance(where, IExact) and isinstance(where.rhs, (str, unicode)):
+                return [[(alias, attname, where.rhs.lower(), True)]]
             elif isinstance(where, IsNull):
-                return [[(where.lhs.alias, attname, None, where.rhs)]]
+                return [[(alias, attname, None, where.rhs)]]
             elif isinstance(where, In) and len(where.rhs) < settings.CACHEOPS_LONG_DISJUNCTION:
-                return [[(where.lhs.alias, attname, v, True)] for v in where.rhs]
+                return [[(alias, attname, v, True)] for v in where.rhs]
             else:
                 return SOME_TREE
         elif isinstance(where, EverythingNode):
