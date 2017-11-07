@@ -6,7 +6,7 @@ local obj = cjson.decode(ARGV[2])
 local conj_cache_key = function (db_table, scheme, obj)
     local parts = {}
     for field in string.gmatch(scheme, "[^,]+") do
-        table.insert(parts, field .. '=' .. tostring(obj[field]):lower())
+        table.insert(parts, field .. '=' .. tostring(obj[field]):upper())
     end
 
     return 'conj:' .. db_table .. ':' .. table.concat(parts, '&')

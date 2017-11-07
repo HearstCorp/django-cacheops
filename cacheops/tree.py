@@ -71,7 +71,7 @@ def dnfs(qs):
             if isinstance(where, Exact):
                 return [[(alias, attname, where.rhs, True)]]
             elif isinstance(where, IExact) and isinstance(where.rhs, basestring):
-                return [[(alias, attname, where.rhs.lower(), True)]]
+                return [[(alias, attname, where.rhs.upper(), True)]]
             elif isinstance(where, IsNull):
                 return [[(alias, attname, None, where.rhs)]]
             elif isinstance(where, In) and len(where.rhs) < settings.CACHEOPS_LONG_DISJUNCTION:
