@@ -70,7 +70,7 @@ def dnfs(qs):
             alias = where.lhs.alias
             if isinstance(where, Exact):
                 return [[(alias, attname, where.rhs, True)]]
-            elif isinstance(where, IExact) and isinstance(where.rhs, (str, unicode)):
+            elif isinstance(where, IExact) and isinstance(where.rhs, basestring):
                 return [[(alias, attname, where.rhs.lower(), True)]]
             elif isinstance(where, IsNull):
                 return [[(alias, attname, None, where.rhs)]]
