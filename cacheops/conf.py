@@ -23,6 +23,7 @@ class Settings(object):
     CACHEOPS_CLEANUP_BATCH_SIZE = 1000
     FILE_CACHE_DIR = '/tmp/cacheops_file_cache'
     FILE_CACHE_TIMEOUT = 60*60*24*30
+    CACHEOPS_LONG_DISJUNCTION = 30
 
     def __getattribute__(self, name):
         if hasattr(base_settings, name):
