@@ -14,11 +14,7 @@ from .conf import model_profile
 
 # NOTE: we don't serialize this fields since their values could be very long
 #       and one should not filter by their equality anyway.
-NOT_SERIALIZED_FIELDS = (
-    models.FileField,
-    models.TextField, # One should not filter by long text equality
-    models.BinaryField,
-)
+NOT_SERIALIZED_FIELDS = models.FileField, models.BinaryField
 
 
 @memoize
