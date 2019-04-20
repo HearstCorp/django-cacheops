@@ -271,6 +271,10 @@ class QuerySetMixin(object):
                 clone._cacheprofile = self._cacheprofile.copy()
             return clone
 
+    def _cache_key_is_in_conj_sets(self, cache_key):
+        dnfs_json = json.dumps(self._cond_dnfs, default=str)
+        return load_script('check_conj')(keys=[self._prefix, cache_key], args=[dnfs_json])
+
     def _fetch_all(self):
         # If already fetched or should pass by then fall back
         if self._result_cache is not None or not self._should_cache('fetch'):
@@ -281,7 +285,8 @@ class QuerySetMixin(object):
 
         with redis_client.getting(cache_key, lock=lock) as cache_data:
             cache_read.send(sender=self.model, func=None, hit=cache_data is not None)
-            if cache_data is not None:
+
+            if cache_data is not None and self._cache_key_is_in_conj_sets(cache_key):
                 self._result_cache = pickle.loads(cache_data)
             else:
                 # This thing appears in Django 1.9.
