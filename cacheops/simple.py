@@ -86,7 +86,10 @@ class RedisCache(BaseCache):
         data = self.conn.get(cache_key)
         if data is None:
             raise CacheMiss
-        return pickle.loads(data)
+        try:
+            return pickle.loads(data)
+        except UnicodeDecodeError:
+            return pickle.loads(data, encoding='latin1')
 
     @handle_connection_failure
     def set(self, cache_key, data, timeout=None):
