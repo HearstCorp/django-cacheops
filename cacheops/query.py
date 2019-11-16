@@ -111,7 +111,10 @@ def cached_as(*samples, **kwargs):
             with redis_client.getting(cache_key, lock=lock) as cache_data:
                 cache_read.send(sender=None, func=func, hit=cache_data is not None)
                 if cache_data is not None:
-                    return pickle.loads(cache_data)
+                    try:
+                        return pickle.loads(cache_data)
+                    except UnicodeDecodeError:
+                        return pickle.loads(cache_data, encoding='latin1')
                 else:
                     if keep_fresh:
                         # We call this "asp" for "as precall" because this key is
@@ -308,7 +311,10 @@ class QuerySetMixin(object):
         with redis_client.getting(cache_key, lock=lock) as cache_data:
             cache_read.send(sender=self.model, func=None, hit=cache_data is not None)
             if cache_data is not None:
-                self._result_cache = pickle.loads(cache_data)
+                try:
+                    self._result_cache = pickle.loads(cache_data)
+                except UnicodeDecodeError:
+                    self._result_cache = pickle.loads(cache_data, encoding='latin1')
             else:
                 # This thing appears in Django 1.9.
                 # In Djangos 1.9 and 1.10 both calls mean the same.
